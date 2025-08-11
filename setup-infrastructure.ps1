@@ -93,10 +93,11 @@ foreach ($env in $environments) {
     # Check if job exists
     $jobExists = $false
     try {
-        gcloud run jobs describe $jobName --region=$REGION 2>$null | Out-Null
+        $null = gcloud run jobs describe $jobName --region=$REGION 2>$null
         $jobExists = $true
         Write-Host "  ℹ️ Job $jobName already exists, updating..." -ForegroundColor Yellow
-    } catch {
+    }
+    catch {
         Write-Host "  📝 Creating new job $jobName..." -ForegroundColor Cyan
     }
     
