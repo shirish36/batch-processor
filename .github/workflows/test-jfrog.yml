@@ -1,0 +1,114 @@
+name: Test Build and Push to JFrog
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:  # Manual trigger
+
+env:
+  REGISTRY_URL: ${{ secrets.JFROG_REGISTRY_URL }}
+  IMAGE_NAME: batch-processor
+
+jobs:
+  test-build-push:
+    name: Test JFrog Build and Push
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Display repository info
+      run: |
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ github.ref }}"
+        echo "Working directory: $(pwd)"
+        echo "Files in current directory:"
+        ls -la
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Generate image tag
+      id: tag
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        TAG="test-${TIMESTAMP}"
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "Generated tag: ${TAG}"
+
+    - name: Test JFrog Authentication
+      run: |
+        echo "Testing JFrog Artifactory authentication..."
+        echo "Registry URL: ${{ env.REGISTRY_URL }}"
+        echo "Username: ${{ secrets.JFROG_USERNAME }}"
+        
+        # Test login
+        echo "${{ secrets.JFROG_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} \
+          --username "${{ secrets.JFROG_USERNAME }}" \
+          --password-stdin
+        
+        echo "✅ JFrog authentication successful!"
+
+    - name: Build Docker image
+      run: |
+        echo "Building Docker image..."
+        echo "Image will be tagged as: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        
+        docker build \
+          --tag "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
+          --tag "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest" \
+          .
+        
+        echo "✅ Docker image built successfully!"
+
+    - name: Test Docker image
+      run: |
+        echo "Testing Docker image..."
+        docker images | grep ${{ env.IMAGE_NAME }}
+        
+        # Quick test to ensure container starts
+        echo "Testing container startup..."
+        docker run --rm \
+          --entrypoint /bin/bash \
+          "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
+          -c "echo 'Container test successful' && dotnet --version"
+        
+        echo "✅ Docker image test successful!"
+
+    - name: Push to JFrog Artifactory
+      run: |
+        echo "Pushing images to JFrog Artifactory..."
+        
+        # Push with timestamp tag
+        echo "Pushing: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        docker push "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        
+        # Push with latest tag
+        echo "Pushing: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
+        docker push "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
+        
+        echo "✅ Images pushed to JFrog Artifactory successfully!"
+
+    - name: Verify JFrog push
+      run: |
+        echo "🎉 Build and Push Test Complete!"
+        echo ""
+        echo "✅ JFrog Authentication: SUCCESS"
+        echo "✅ Docker Build: SUCCESS"
+        echo "✅ Container Test: SUCCESS"  
+        echo "✅ JFrog Push: SUCCESS"
+        echo ""
+        echo "📦 Images in JFrog Artifactory:"
+        echo "  - ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        echo "  - ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
+        echo ""
+        echo "🔗 JFrog URL: ${{ env.REGISTRY_URL }}"
+
+    - name: Clean up
+      if: always()
+      run: |
+        echo "Cleaning up local images..."
+        docker rmi "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" || true
+        docker rmi "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest" || true
+        echo "✅ Cleanup complete"
