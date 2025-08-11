@@ -1,0 +1,116 @@
+name: Direct Deploy JFrog to Cloud Run Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (e.g., latest or test-20250811-033649)'
+        required: true
+        default: 'latest'
+        type: string
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+  JFROG_REGISTRY_URL: ${{ secrets.JFROG_REGISTRY_URL }}
+  DOCKER_REPO: shirish-docker-docker-local
+  IMAGE_NAME: batch-processor
+
+jobs:
+  direct-deploy:
+    name: Direct Deploy from JFrog to Cloud Run Job
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Display deployment info
+      run: |
+        echo "🚀 Direct Deploy from JFrog to GCP Cloud Run Job"
+        echo "📦 Source Image: ${{ env.JFROG_REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        echo "🌍 Environment: ${{ inputs.environment }}"
+        echo "📍 GCP Project: ${{ env.GCP_PROJECT_ID }}"
+        echo "📍 GCP Region: ${{ env.GCP_REGION }}"
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy to Cloud Run Job with JFrog Image
+      run: |
+        echo "🚀 Deploying directly from JFrog to Cloud Run Job..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        JFROG_IMAGE="${{ env.JFROG_REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        
+        echo "Job Name: $JOB_NAME"
+        echo "Image: $JFROG_IMAGE"
+        
+        # Create or update the Cloud Run Job
+        gcloud run jobs replace \
+          --image="$JFROG_IMAGE" \
+          --region="${{ env.GCP_REGION }}" \
+          --set-env-vars="JFROG_USERNAME=${{ secrets.JFROG_USERNAME }}" \
+          --set-env-vars="JFROG_PASSWORD=${{ secrets.JFROG_PASSWORD }}" \
+          --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
+          --max-retries=3 \
+          --parallelism=1 \
+          --task-count=1 \
+          --cpu=1 \
+          --memory=2Gi \
+          --task-timeout=3600 \
+          $JOB_NAME
+        
+        echo "✅ Cloud Run Job updated with JFrog image"
+
+    - name: Test job execution
+      if: inputs.environment == 'dev'
+      run: |
+        echo "🧪 Testing job execution..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        
+        # Execute the job
+        EXECUTION_NAME=$(gcloud run jobs execute $JOB_NAME \
+          --region="${{ env.GCP_REGION }}" \
+          --format="value(metadata.name)")
+        
+        echo "🚀 Job execution started: $EXECUTION_NAME"
+        
+        # Wait and check status
+        sleep 30
+        
+        STATUS=$(gcloud run jobs executions describe $EXECUTION_NAME \
+          --region="${{ env.GCP_REGION }}" \
+          --format="value(status.conditions[0].type)")
+        
+        echo "📊 Execution status: $STATUS"
+
+    - name: Deployment summary
+      run: |
+        echo "🎉 Direct Deployment Complete!"
+        echo "================================"
+        echo "✅ Source: ${{ env.JFROG_REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        echo "✅ Target: Cloud Run Job batch-processor-${{ inputs.environment }}"
+        echo "✅ No intermediate registry copy needed"
+        echo ""
+        echo "🔗 Monitor: https://console.cloud.google.com/run/jobs/details/${{ env.GCP_REGION }}/batch-processor-${{ inputs.environment }}?project=${{ env.GCP_PROJECT_ID }}"
