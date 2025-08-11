@@ -1,0 +1,161 @@
+name: Build and Deploy to JFrog with CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      image_tag:
+        description: 'Image tag to build'
+        required: true
+        default: 'latest'
+        type: string
+
+env:
+  PROJECT_ID: mission-2025-devops
+  GAR_LOCATION: us-central1
+  SERVICE_NAME: batch-processor
+  REGION: us-central1
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ vars.JF_URL }}
+          JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+
+      - name: Build and Push to JFrog
+        env:
+          IMAGE_NAME: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}
+          JFROG_CLI_BUILD_NAME: batch-processor-build
+          JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          echo "Building Docker image: $IMAGE_NAME"
+          jf docker build -t $IMAGE_NAME .
+          echo "Pushing to JFrog Artifactory..."
+          jf docker push $IMAGE_NAME
+          
+          # Collect build information
+          jf rt build-collect-env
+          jf rt build-add-git
+          jf rt build-publish
+
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: 'access_token'
+          workload_identity_provider: 'projects/283962084457/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-actions@mission-2025-devops.iam.gserviceaccount.com'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io
+
+      - name: Pull from JFrog and Push to GCR
+        env:
+          JFROG_IMAGE: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}
+          GCR_IMAGE: gcr.io/${{ env.PROJECT_ID }}/batch-processor:${{ inputs.image_tag }}
+        run: |
+          echo "Pulling image from JFrog..."
+          jf docker pull $JFROG_IMAGE
+          
+          echo "Tagging for GCR..."
+          docker tag $JFROG_IMAGE $GCR_IMAGE
+          
+          echo "Pushing to GCR..."
+          docker push $GCR_IMAGE
+
+      - name: Deploy to Cloud Run Job
+        env:
+          GCR_IMAGE: gcr.io/${{ env.PROJECT_ID }}/batch-processor:${{ inputs.image_tag }}
+          JOB_NAME: batch-processor-${{ inputs.environment }}
+        run: |
+          echo "Updating Cloud Run Job: $JOB_NAME"
+          gcloud run jobs update $JOB_NAME \
+            --image=$GCR_IMAGE \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Test Cloud Run Job Execution
+        env:
+          JOB_NAME: batch-processor-${{ inputs.environment }}
+        run: |
+          echo "Testing job execution..."
+          EXECUTION_NAME=$(gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format="value(metadata.name)")
+          
+          echo "Execution started: $EXECUTION_NAME"
+          
+          # Wait for completion (with timeout)
+          timeout=300
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            STATUS=$(gcloud run jobs executions describe $EXECUTION_NAME \
+              --region=${{ env.REGION }} \
+              --project=${{ env.PROJECT_ID }} \
+              --format="value(status.conditions[0].type)")
+            
+            if [ "$STATUS" = "Completed" ]; then
+              echo "✅ Job execution completed successfully!"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "❌ Job execution failed!"
+              gcloud run jobs executions describe $EXECUTION_NAME \
+                --region=${{ env.REGION }} \
+                --project=${{ env.PROJECT_ID }}
+              exit 1
+            fi
+            
+            echo "Job status: $STATUS (waiting...)"
+            sleep 10
+            elapsed=$((elapsed + 10))
+          done
+          
+          if [ $elapsed -ge $timeout ]; then
+            echo "⚠️ Job execution timeout after ${timeout}s"
+            exit 1
+          fi
+
+      - name: Get Job Logs
+        env:
+          JOB_NAME: batch-processor-${{ inputs.environment }}
+        run: |
+          echo "Fetching job logs..."
+          gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" \
+            --limit=50 \
+            --format="table(timestamp,severity,textPayload)" \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **JFrog Image**: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **GCR Image**: gcr.io/${{ env.PROJECT_ID }}/batch-processor:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cloud Run Job**: batch-processor-${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Status**: Deployment completed successfully!" >> $GITHUB_STEP_SUMMARY
