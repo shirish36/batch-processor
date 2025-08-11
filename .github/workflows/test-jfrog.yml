@@ -8,6 +8,7 @@ on:
 env:
   REGISTRY_URL: ${{ secrets.JFROG_REGISTRY_URL }}
   IMAGE_NAME: batch-processor
+  DOCKER_REPO: shirish-docker-docker-local  # Your JFrog Docker repository name
 
 jobs:
   test-build-push:
@@ -53,11 +54,11 @@ jobs:
     - name: Build Docker image
       run: |
         echo "Building Docker image..."
-        echo "Image will be tagged as: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        echo "Image will be tagged as: ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
         
         docker build \
-          --tag "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
-          --tag "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest" \
+          --tag "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
+          --tag "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest" \
           .
         
         echo "✅ Docker image built successfully!"
@@ -71,7 +72,7 @@ jobs:
         echo "Testing container startup..."
         docker run --rm \
           --entrypoint /bin/bash \
-          "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
+          "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
           -c "echo 'Container test successful' && ls -la /app && echo 'BatchProcessor.dll found'"
         
         echo "✅ Docker image test successful!"
@@ -81,12 +82,12 @@ jobs:
         echo "Pushing images to JFrog Artifactory..."
         
         # Push with timestamp tag
-        echo "Pushing: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
-        docker push "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        echo "Pushing: ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        docker push "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
         
         # Push with latest tag
-        echo "Pushing: ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
-        docker push "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
+        echo "Pushing: ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest"
+        docker push "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest"
         
         echo "✅ Images pushed to JFrog Artifactory successfully!"
 
@@ -100,8 +101,8 @@ jobs:
         echo "✅ JFrog Push: SUCCESS"
         echo ""
         echo "📦 Images in JFrog Artifactory:"
-        echo "  - ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
-        echo "  - ${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest"
+        echo "  - ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        echo "  - ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest"
         echo ""
         echo "🔗 JFrog URL: ${{ env.REGISTRY_URL }}"
 
@@ -109,6 +110,6 @@ jobs:
       if: always()
       run: |
         echo "Cleaning up local images..."
-        docker rmi "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" || true
-        docker rmi "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:latest" || true
+        docker rmi "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" || true
+        docker rmi "${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest" || true
         echo "✅ Cleanup complete"

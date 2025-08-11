@@ -40,8 +40,8 @@ git push origin main
 
 ### **JFrog Artifactory Images:**
 ```
-trial4jlj6w.jfrog.io/shirish-docker/batch-processor:test-20250810-220000
-trial4jlj6w.jfrog.io/shirish-docker/batch-processor:latest
+trial4jlj6w.jfrog.io/shirish-docker-docker-local/batch-processor:test-20250810-220000
+trial4jlj6w.jfrog.io/shirish-docker-docker-local/batch-processor:latest
 ```
 
 ### **Workflow Steps:**
