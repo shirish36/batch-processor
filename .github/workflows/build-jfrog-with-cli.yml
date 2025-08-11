@@ -38,12 +38,19 @@ jobs:
       - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}
+          JF_URL: https://trial4jlj6w.jfrog.io
           JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+
+      - name: Verify JFrog CLI Configuration
+        run: |
+          echo "Verifying JFrog CLI configuration..."
+          jf --version
+          jf config show
+          jf rt ping
 
       - name: Build and Push to JFrog
         env:
-          IMAGE_NAME: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}
+          IMAGE_NAME: trial4jlj6w.jfrog.io/shirish-docker-docker-local/batch-processor:${{ inputs.image_tag }}
           JFROG_CLI_BUILD_NAME: batch-processor-build
           JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
         run: |
@@ -73,7 +80,7 @@ jobs:
 
       - name: Pull from JFrog and Push to GCR
         env:
-          JFROG_IMAGE: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}
+          JFROG_IMAGE: trial4jlj6w.jfrog.io/shirish-docker-docker-local/batch-processor:${{ inputs.image_tag }}
           GCR_IMAGE: gcr.io/${{ env.PROJECT_ID }}/batch-processor:${{ inputs.image_tag }}
         run: |
           echo "Pulling image from JFrog..."
@@ -153,7 +160,7 @@ jobs:
           echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image Tag**: ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **JFrog Image**: trial4jlj6w.jfrog.io/shirish-docker-docker/batch-processor:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **JFrog Image**: trial4jlj6w.jfrog.io/shirish-docker-docker-local/batch-processor:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **GCR Image**: gcr.io/${{ env.PROJECT_ID }}/batch-processor:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Cloud Run Job**: batch-processor-${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
