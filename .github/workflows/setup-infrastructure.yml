@@ -1,0 +1,144 @@
+name: Setup Cloud Run Job Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to set up'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+
+jobs:
+  setup-infrastructure:
+    name: Setup Cloud Run Job Infrastructure
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Display setup info
+      run: |
+        echo "🏗️ Setting up Cloud Run Job Infrastructure"
+        echo "🌍 Environment: ${{ inputs.environment }}"
+        echo "📍 GCP Project: ${{ env.GCP_PROJECT_ID }}"
+        echo "📍 GCP Region: ${{ env.GCP_REGION }}"
+        echo "🎯 Job Name: batch-processor-${{ inputs.environment }}"
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Enable required APIs
+      run: |
+        echo "🔧 Enabling required GCP APIs..."
+        gcloud services enable run.googleapis.com
+        gcloud services enable cloudbuild.googleapis.com
+        gcloud services enable containerregistry.googleapis.com
+        echo "✅ APIs enabled successfully"
+
+    - name: Create placeholder image in GCR
+      run: |
+        echo "🐳 Creating placeholder image in Google Container Registry..."
+        
+        # Create a simple placeholder Dockerfile
+        cat << 'EOF' > Dockerfile.placeholder
+        FROM gcr.io/google-appengine/debian11
+        RUN echo "Placeholder image for batch-processor" > /placeholder.txt
+        CMD ["cat", "/placeholder.txt"]
+        EOF
+        
+        # Build and push placeholder image
+        PLACEHOLDER_IMAGE="gcr.io/${{ env.GCP_PROJECT_ID }}/batch-processor:placeholder"
+        
+        gcloud auth configure-docker --quiet
+        docker build -f Dockerfile.placeholder -t "$PLACEHOLDER_IMAGE" .
+        docker push "$PLACEHOLDER_IMAGE"
+        
+        echo "✅ Placeholder image created: $PLACEHOLDER_IMAGE"
+        echo "PLACEHOLDER_IMAGE=$PLACEHOLDER_IMAGE" >> $GITHUB_ENV
+
+    - name: Create Cloud Run Job
+      run: |
+        echo "🚀 Creating Cloud Run Job..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        
+        # Check if job already exists
+        if gcloud run jobs describe "$JOB_NAME" --region="${{ env.GCP_REGION }}" >/dev/null 2>&1; then
+          echo "ℹ️ Job $JOB_NAME already exists, updating it..."
+          OPERATION="replace"
+        else
+          echo "📝 Creating new job $JOB_NAME..."
+          OPERATION="create"
+        fi
+        
+        # Create or update the job
+        gcloud run jobs $OPERATION "$JOB_NAME" \
+          --image="${{ env.PLACEHOLDER_IMAGE }}" \
+          --region="${{ env.GCP_REGION }}" \
+          --max-retries=3 \
+          --parallelism=1 \
+          --cpu=1 \
+          --memory=2Gi \
+          --task-timeout=3600 \
+          --service-account="${{ secrets.GCP_SERVICE_ACCOUNT }}" \
+          --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
+          --set-env-vars="GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}"
+        
+        echo "✅ Cloud Run Job $JOB_NAME created/updated successfully"
+
+    - name: Verify job creation
+      run: |
+        echo "🔍 Verifying job creation..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        
+        # Get job details
+        gcloud run jobs describe "$JOB_NAME" --region="${{ env.GCP_REGION }}" --format="yaml"
+        
+        echo "✅ Job verification complete"
+
+    - name: Setup summary
+      run: |
+        echo "🎉 Infrastructure Setup Complete!"
+        echo "=================================="
+        echo "✅ APIs enabled: run.googleapis.com, cloudbuild.googleapis.com, containerregistry.googleapis.com"
+        echo "✅ Placeholder image: ${{ env.PLACEHOLDER_IMAGE }}"
+        echo "✅ Cloud Run Job: batch-processor-${{ inputs.environment }}"
+        echo "✅ Region: ${{ env.GCP_REGION }}"
+        echo "✅ Service Account: ${{ secrets.GCP_SERVICE_ACCOUNT }}"
+        echo ""
+        echo "🔗 Next Steps:"
+        echo "1. Job is ready for deployment"
+        echo "2. Use 'Deploy to GCP Cloud Run Job' workflow"
+        echo "3. Select image tag and environment"
+        echo ""
+        echo "🌐 GCP Console:"
+        echo "  - Jobs: https://console.cloud.google.com/run/jobs?project=${{ env.GCP_PROJECT_ID }}"
+        echo "  - This Job: https://console.cloud.google.com/run/jobs/details/${{ env.GCP_REGION }}/batch-processor-${{ inputs.environment }}?project=${{ env.GCP_PROJECT_ID }}"
+
+    - name: Clean up
+      if: always()
+      run: |
+        echo "🧹 Cleaning up temporary files..."
+        rm -f Dockerfile.placeholder
+        echo "✅ Cleanup complete"
