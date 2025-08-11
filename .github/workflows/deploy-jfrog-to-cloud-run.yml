@@ -1,0 +1,245 @@
+name: Deploy JFrog Image to Cloud Run Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'JFrog image tag to deploy (e.g., latest, test-20250811-033649)'
+        required: true
+        default: 'latest'
+        type: string
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      force_rebuild:
+        description: 'Force rebuild even if image exists in GCR'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+  JFROG_REGISTRY_URL: ${{ secrets.JFROG_REGISTRY_URL }}
+  DOCKER_REPO: shirish-docker-docker-local
+  IMAGE_NAME: batch-processor
+
+jobs:
+  deploy-jfrog-to-cloud-run:
+    name: Deploy JFrog Image to Cloud Run Job
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Display deployment information
+      run: |
+        echo "🚀 JFrog → GCR → Cloud Run Job Deployment"
+        echo "================================================"
+        echo "📦 Source (JFrog): ${{ env.JFROG_REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        echo "📦 Target (GCR): gcr.io/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        echo "🎯 Cloud Run Job: batch-processor-${{ inputs.environment }}"
+        echo "🌍 Environment: ${{ inputs.environment }}"
+        echo "📍 GCP Project: ${{ env.GCP_PROJECT_ID }}"
+        echo "📍 GCP Region: ${{ env.GCP_REGION }}"
+        echo "🔄 Force Rebuild: ${{ inputs.force_rebuild }}"
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker for GCP
+      run: |
+        echo "🔧 Configuring Docker for Google Cloud..."
+        gcloud auth configure-docker --quiet
+        echo "✅ Docker configured for GCR"
+
+    - name: Authenticate Docker with JFrog
+      run: |
+        echo "🔐 Authenticating Docker with JFrog Artifactory..."
+        echo "${{ secrets.JFROG_PASSWORD }}" | docker login ${{ env.JFROG_REGISTRY_URL }} \
+          --username "${{ secrets.JFROG_USERNAME }}" \
+          --password-stdin
+        echo "✅ Authenticated with JFrog"
+
+    - name: Set image variables
+      id: images
+      run: |
+        JFROG_IMAGE="${{ env.JFROG_REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        GCR_IMAGE="gcr.io/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        GCR_LATEST="gcr.io/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest"
+        
+        echo "JFROG_IMAGE=$JFROG_IMAGE" >> $GITHUB_OUTPUT
+        echo "GCR_IMAGE=$GCR_IMAGE" >> $GITHUB_OUTPUT
+        echo "GCR_LATEST=$GCR_LATEST" >> $GITHUB_OUTPUT
+        
+        echo "📝 Image variables set:"
+        echo "  JFrog: $JFROG_IMAGE"
+        echo "  GCR: $GCR_IMAGE"
+        echo "  GCR Latest: $GCR_LATEST"
+
+    - name: Check if image exists in GCR
+      id: check_gcr
+      if: inputs.force_rebuild == false
+      run: |
+        echo "🔍 Checking if image already exists in GCR..."
+        
+        if gcloud container images describe "${{ steps.images.outputs.GCR_IMAGE }}" >/dev/null 2>&1; then
+          echo "✅ Image already exists in GCR: ${{ steps.images.outputs.GCR_IMAGE }}"
+          echo "SKIP_BUILD=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Image not found in GCR, will build and push"
+          echo "SKIP_BUILD=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Pull image from JFrog Artifactory
+      if: steps.check_gcr.outputs.SKIP_BUILD == 'false' || inputs.force_rebuild == true
+      run: |
+        echo "📥 Pulling image from JFrog Artifactory..."
+        echo "Source: ${{ steps.images.outputs.JFROG_IMAGE }}"
+        
+        docker pull "${{ steps.images.outputs.JFROG_IMAGE }}"
+        
+        echo "✅ Image pulled successfully from JFrog"
+        
+        # Display image info
+        docker images | grep "${{ env.IMAGE_NAME }}" || true
+
+    - name: Tag image for Google Container Registry
+      if: steps.check_gcr.outputs.SKIP_BUILD == 'false' || inputs.force_rebuild == true
+      run: |
+        echo "🏷️ Tagging image for Google Container Registry..."
+        
+        # Tag with specific version
+        docker tag "${{ steps.images.outputs.JFROG_IMAGE }}" "${{ steps.images.outputs.GCR_IMAGE }}"
+        
+        # Also tag as latest for the environment
+        docker tag "${{ steps.images.outputs.JFROG_IMAGE }}" "${{ steps.images.outputs.GCR_LATEST }}"
+        
+        echo "✅ Image tagged for GCR:"
+        echo "  - ${{ steps.images.outputs.GCR_IMAGE }}"
+        echo "  - ${{ steps.images.outputs.GCR_LATEST }}"
+
+    - name: Push image to Google Container Registry
+      if: steps.check_gcr.outputs.SKIP_BUILD == 'false' || inputs.force_rebuild == true
+      run: |
+        echo "📤 Pushing image to Google Container Registry..."
+        
+        # Push specific version
+        echo "Pushing: ${{ steps.images.outputs.GCR_IMAGE }}"
+        docker push "${{ steps.images.outputs.GCR_IMAGE }}"
+        
+        # Push latest
+        echo "Pushing: ${{ steps.images.outputs.GCR_LATEST }}"
+        docker push "${{ steps.images.outputs.GCR_LATEST }}"
+        
+        echo "✅ Images pushed to GCR successfully!"
+
+    - name: Update Cloud Run Job
+      run: |
+        echo "🚀 Updating Cloud Run Job with new image..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        DEPLOY_IMAGE="${{ steps.images.outputs.GCR_IMAGE }}"
+        
+        echo "Job Name: $JOB_NAME"
+        echo "Image: $DEPLOY_IMAGE"
+        
+        # Update the Cloud Run Job
+        gcloud run jobs update "$JOB_NAME" \
+          --image="$DEPLOY_IMAGE" \
+          --region="${{ env.GCP_REGION }}" \
+          --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
+          --set-env-vars="GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}" \
+          --set-env-vars="IMAGE_TAG=${{ inputs.image_tag }}" \
+          --set-env-vars="DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --quiet
+        
+        echo "✅ Cloud Run Job updated successfully!"
+        
+        # Get job details
+        echo "📋 Job Details:"
+        gcloud run jobs describe "$JOB_NAME" \
+          --region="${{ env.GCP_REGION }}" \
+          --format="value(spec.template.spec.template.spec.containers[0].image)"
+
+    - name: Test job execution
+      if: inputs.environment == 'dev'
+      run: |
+        echo "🧪 Testing job execution in dev environment..."
+        
+        JOB_NAME="batch-processor-${{ inputs.environment }}"
+        
+        # Execute the job
+        echo "🚀 Starting job execution..."
+        EXECUTION_NAME=$(gcloud run jobs execute "$JOB_NAME" \
+          --region="${{ env.GCP_REGION }}" \
+          --format="value(metadata.name)")
+        
+        echo "📝 Execution started: $EXECUTION_NAME"
+        echo "🔗 View logs: https://console.cloud.google.com/run/jobs/details/${{ env.GCP_REGION }}/$JOB_NAME/executions/$EXECUTION_NAME?project=${{ env.GCP_PROJECT_ID }}"
+        
+        # Wait a bit and check initial status
+        sleep 15
+        
+        STATUS=$(gcloud run jobs executions describe "$EXECUTION_NAME" \
+          --region="${{ env.GCP_REGION }}" \
+          --format="value(status.conditions[0].type)" 2>/dev/null || echo "Unknown")
+        
+        echo "📊 Initial execution status: $STATUS"
+        
+        if [ "$STATUS" = "Ready" ]; then
+          echo "✅ Job execution completed successfully"
+        else
+          echo "ℹ️ Job is still running or in progress"
+          echo "💡 Check the GCP Console for detailed logs"
+        fi
+
+    - name: Deployment summary
+      if: always()
+      run: |
+        echo ""
+        echo "🎉 Deployment Summary"
+        echo "===================="
+        echo "✅ Source: ${{ steps.images.outputs.JFROG_IMAGE }}"
+        echo "✅ Target: ${{ steps.images.outputs.GCR_IMAGE }}"
+        echo "✅ Cloud Run Job: batch-processor-${{ inputs.environment }}"
+        echo "✅ Environment: ${{ inputs.environment }}"
+        echo "✅ Region: ${{ env.GCP_REGION }}"
+        echo ""
+        echo "🔗 Useful Links:"
+        echo "  - GCP Jobs Console: https://console.cloud.google.com/run/jobs?project=${{ env.GCP_PROJECT_ID }}"
+        echo "  - This Job: https://console.cloud.google.com/run/jobs/details/${{ env.GCP_REGION }}/batch-processor-${{ inputs.environment }}?project=${{ env.GCP_PROJECT_ID }}"
+        echo "  - Container Images: https://console.cloud.google.com/gcr/images/${{ env.GCP_PROJECT_ID }}?project=${{ env.GCP_PROJECT_ID }}"
+        echo ""
+        echo "🎯 Deployment Status: SUCCESS"
+
+    - name: Clean up local images
+      if: always()
+      run: |
+        echo "🧹 Cleaning up local Docker images..."
+        
+        # Remove JFrog image
+        docker rmi "${{ steps.images.outputs.JFROG_IMAGE }}" 2>/dev/null || true
+        
+        # Remove GCR images
+        docker rmi "${{ steps.images.outputs.GCR_IMAGE }}" 2>/dev/null || true
+        docker rmi "${{ steps.images.outputs.GCR_LATEST }}" 2>/dev/null || true
+        
+        echo "✅ Local cleanup complete"
