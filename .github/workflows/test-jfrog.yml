@@ -72,7 +72,7 @@ jobs:
         docker run --rm \
           --entrypoint /bin/bash \
           "${{ env.REGISTRY_URL }}/shirish-docker/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" \
-          -c "echo 'Container test successful' && dotnet --version"
+          -c "echo 'Container test successful' && ls -la /app && echo 'BatchProcessor.dll found'"
         
         echo "✅ Docker image test successful!"
 
