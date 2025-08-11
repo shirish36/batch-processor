@@ -299,15 +299,10 @@ dotnet test --filter Category=Load
    - Check encoding (UTF-8)
    - Verify column headers
 
-##  Docker Build Test
+## JFrog Test Setup
 
-**Build Date**: 2025-08-10 22:08:59  
+**Setup Date**: 2025-08-10 22:08:59  
 **Purpose**: Testing JFrog Artifactory integration  
-**Workflow**: build-batch-processor.yml  
+**Workflow**: .github/workflows/test-jfrog.yml  
 
-
-###  Trigger Test
-
-**Second attempt**: 2025-08-10 22:17:20  
-**Reason**: Manual trigger test  
-
+This repository includes a simplified test setup for JFrog connectivity and Docker build/push operations.
